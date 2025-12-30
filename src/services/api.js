@@ -928,3 +928,80 @@ export const fetchEconomicIndicator = async (indicator) => {
     }
     return { value: 'N/A', date: '' };
 };
+
+/**
+ * Fetch Shares Float Data
+ * Returns float shares, outstanding shares, and free float percentage
+ */
+export const fetchSharesFloat = async (ticker) => {
+    if (!API_KEY) return null;
+
+    const cacheKey = `float_${ticker}`;
+    const cached = getCachedData(cacheKey);
+    if (cached) return cached;
+
+    try {
+        const response = await fetch(`${BASE_URL}/shares-float?symbol=${ticker}&apikey=${API_KEY}`);
+        const data = await response.json();
+        checkApiError(data);
+
+        if (data && data.length > 0) {
+            const floatData = data[0];
+            const result = {
+                symbol: floatData.symbol,
+                freeFloat: floatData.freeFloat,
+                floatShares: floatData.floatShares,
+                outstandingShares: floatData.outstandingShares,
+                date: floatData.date
+            };
+            setCachedData(cacheKey, result, 'macro'); // 24 hour cache
+            return result;
+        }
+        return null;
+    } catch (e) {
+        console.warn(`FMP Error for Shares Float ${ticker}:`, e.message);
+        const staleData = getStaleCachedData(cacheKey);
+        if (staleData) return staleData;
+        return null;
+    }
+};
+
+/**
+ * Fetch Institutional Holders (Top Shareholders)
+ * Returns list of institutional holders with shares and percentage
+ */
+export const fetchInstitutionalHolders = async (ticker) => {
+    if (!API_KEY) return [];
+
+    const cacheKey = `holders_${ticker}`;
+    const cached = getCachedData(cacheKey);
+    if (cached) return cached;
+
+    try {
+        const response = await fetch(`${BASE_URL}/institutional-holder?symbol=${ticker}&apikey=${API_KEY}`);
+        const data = await response.json();
+        checkApiError(data);
+
+        if (data && data.length > 0) {
+            // Sort by shares held and take top 10
+            const holders = data
+                .sort((a, b) => (b.shares || 0) - (a.shares || 0))
+                .slice(0, 10)
+                .map(holder => ({
+                    holder: holder.holder,
+                    shares: holder.shares,
+                    dateReported: holder.dateReported,
+                    change: holder.change,
+                    changePercent: holder.changePercent
+                }));
+            setCachedData(cacheKey, holders, 'financials'); // 7 day cache
+            return holders;
+        }
+        return [];
+    } catch (e) {
+        console.warn(`FMP Error for Institutional Holders ${ticker}:`, e.message);
+        const staleData = getStaleCachedData(cacheKey);
+        if (staleData) return staleData;
+        return [];
+    }
+};

@@ -1,13 +1,47 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, ArrowUpRight, ArrowDownRight, Layers, BarChart3, TrendingUp, Activity, DollarSign, PieChart, Coins, Newspaper } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, ArrowDownRight, Layers, BarChart3, TrendingUp, Activity, DollarSign, PieChart, Coins, Newspaper, Users, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
 import { getDebtMaturity } from '../data/mockStocks';
-import { fetchStockQuote, fetchCompanyOverview, fetchDailyHistory, fetchNewsSentiment } from '../services/api';
+import { fetchStockQuote, fetchCompanyOverview, fetchDailyHistory, fetchNewsSentiment, fetchSharesFloat, fetchInstitutionalHolders } from '../services/api';
 import StockChart from '../components/charts/StockChart';
 import DebtMaturityChart from '../components/charts/DebtMaturityChart';
 import ErrorMessage from '../components/common/ErrorMessage';
 import Navbar from '../components/layout/Navbar';
 import clsx from 'clsx';
+
+// Collapsible Card Component for clean UI
+const CollapsibleCard = ({ title, icon: Icon, children, defaultOpen = false }) => {
+    const [isOpen, setIsOpen] = useState(defaultOpen);
+
+    return (
+        <div className="bg-finance-card rounded-xl border border-gray-800 overflow-hidden">
+            <button
+                onClick={() => setIsOpen(!isOpen)}
+                className="w-full p-4 flex items-center justify-between hover:bg-gray-800/30 transition-colors"
+            >
+                <div className="flex items-center gap-2">
+                    {Icon && <Icon className="h-4 w-4 text-finance-accent" />}
+                    <span className="text-sm font-bold text-white">{title}</span>
+                </div>
+                {isOpen ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
+            </button>
+            {isOpen && (
+                <div className="px-4 pb-4 border-t border-gray-800">
+                    {children}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// Format large numbers for display
+const formatLargeNumber = (num) => {
+    if (!num) return '-';
+    if (num >= 1e12) return `${(num / 1e12).toFixed(2)}T`;
+    if (num >= 1e9) return `${(num / 1e9).toFixed(2)}B`;
+    if (num >= 1e6) return `${(num / 1e6).toFixed(2)}M`;
+    return num.toLocaleString();
+};
 
 const StockDetail = () => {
     const { ticker } = useParams();
@@ -16,6 +50,8 @@ const StockDetail = () => {
     const [stock, setStock] = useState(null);
     const [history, setHistory] = useState({ daily: [], quarterly: [] });
     const [news, setNews] = useState([]);
+    const [floatData, setFloatData] = useState(null);
+    const [holders, setHolders] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
@@ -151,6 +187,25 @@ const StockDetail = () => {
         loadData();
         return () => { isMounted = false; };
     }, [ticker]);
+
+    // Secondary data fetch (lazy loaded to reduce initial API calls)
+    useEffect(() => {
+        if (!loading && stock) {
+            const loadSecondaryData = async () => {
+                try {
+                    const [floatResult, holdersResult] = await Promise.all([
+                        fetchSharesFloat(ticker),
+                        fetchInstitutionalHolders(ticker)
+                    ]);
+                    setFloatData(floatResult);
+                    setHolders(holdersResult || []);
+                } catch (err) {
+                    console.warn('Secondary data fetch error:', err);
+                }
+            };
+            loadSecondaryData();
+        }
+    }, [ticker, loading, stock]);
 
     const debtSchedule = useMemo(() => getDebtMaturity(ticker), [ticker]); // This is still mock for UI demo as unrelated to Alpha Vantage
 
@@ -421,6 +476,82 @@ const StockDetail = () => {
                         </div>
                     </div>
                 </div>
+
+                {/* New Features Section: Float Data + Collapsible Cards */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                    {/* Float Data Card */}
+                    <div className="bg-finance-card p-6 rounded-xl border border-gray-800">
+                        <h3 className="text-sm font-bold text-finance-muted mb-4 uppercase flex items-center gap-2">
+                            <PieChart className="h-4 w-4" /> Share Float
+                        </h3>
+                        <div className="space-y-3">
+                            <div className="flex justify-between items-center">
+                                <span className="text-gray-400 text-sm">Float Shares</span>
+                                <span className="text-white font-mono font-bold">
+                                    {floatData?.floatShares ? formatLargeNumber(floatData.floatShares) : '-'}
+                                </span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <span className="text-gray-400 text-sm">Outstanding</span>
+                                <span className="text-white font-mono">
+                                    {floatData?.outstandingShares ? formatLargeNumber(floatData.outstandingShares) : '-'}
+                                </span>
+                            </div>
+                            <div className="flex justify-between items-center pt-2 border-t border-gray-800">
+                                <span className="text-gray-400 text-sm">Free Float</span>
+                                <span className="text-finance-accent font-mono font-bold text-lg">
+                                    {floatData?.freeFloat ? `${floatData.freeFloat.toFixed(1)}%` : '-'}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Top Holders - Collapsible */}
+                    <div className="lg:col-span-2">
+                        <CollapsibleCard title="Top 10 Institutional Holders" icon={Users}>
+                            <div className="mt-4 overflow-x-auto">
+                                {holders.length > 0 ? (
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="text-left text-gray-500 text-xs uppercase">
+                                                <th className="pb-2">Holder</th>
+                                                <th className="pb-2 text-right">Shares</th>
+                                                <th className="pb-2 text-right">Change</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {holders.map((holder, idx) => (
+                                                <tr key={idx} className="border-t border-gray-800">
+                                                    <td className="py-2 text-white font-medium truncate max-w-[200px]">{holder.holder}</td>
+                                                    <td className="py-2 text-right text-gray-300 font-mono">{formatLargeNumber(holder.shares)}</td>
+                                                    <td className={clsx(
+                                                        "py-2 text-right font-mono",
+                                                        holder.change > 0 ? "text-finance-green" : holder.change < 0 ? "text-finance-red" : "text-gray-500"
+                                                    )}>
+                                                        {holder.change ? (holder.change > 0 ? '+' : '') + formatLargeNumber(holder.change) : '-'}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                ) : (
+                                    <p className="text-sm text-finance-muted py-4 text-center">No institutional holder data available</p>
+                                )}
+                            </div>
+                        </CollapsibleCard>
+                    </div>
+                </div>
+
+                {/* Debt Maturity Schedule - Collapsible */}
+                {debtSchedule && debtSchedule.length > 0 && (
+                    <div className="mb-8">
+                        <CollapsibleCard title="Debt Maturity Schedule" icon={Calendar}>
+                            <div className="mt-4">
+                                <DebtMaturityChart data={debtSchedule} />
+                            </div>
+                        </CollapsibleCard>
+                    </div>
+                )}
 
                 {/* About Section */}
                 <div className="bg-finance-card p-6 rounded-xl border border-gray-800">
