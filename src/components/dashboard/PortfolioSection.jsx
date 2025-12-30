@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, ArrowDownRight, Target, Plus, X, Edit2, Trash2, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
 import clsx from 'clsx';
-import { fetchStockQuote, fetchKeyMetrics, fetchFinancialRatios, fetchPriceTarget, fetchIncomeStatement } from '../../services/api';
+import { fetchBatchQuotes } from '../../services/api';
 import { getCuratedStocks, addCuratedStock, removeStock, subscribeToStocks, getThesisEntries, addThesisEntry, deleteThesisEntry, getAllThesisEntries } from '../../services/supabase';
 
 const formatLargeNumber = (num) => {
@@ -11,12 +11,6 @@ const formatLargeNumber = (num) => {
     if (num >= 1e9) return `$${(num / 1e9).toFixed(2)}B`;
     if (num >= 1e6) return `$${(num / 1e6).toFixed(2)}M`;
     return `$${num.toLocaleString()}`;
-};
-
-const formatPercent = (num) => {
-    if (num === null || num === undefined) return '-';
-    const percent = typeof num === 'number' ? num * 100 : parseFloat(num);
-    return `${percent.toFixed(1)}%`;
 };
 
 const formatDate = (dateStr) => {
@@ -28,62 +22,11 @@ const formatDate = (dateStr) => {
     });
 };
 
-const StatBox = ({ label, value, highlight = false }) => (
-    <div className="text-center">
-        <p className="text-[9px] text-gray-500 uppercase tracking-wider">{label}</p>
-        <p className={clsx("text-xs font-medium", highlight ? "text-finance-accent" : "text-gray-300")}>{value}</p>
-    </div>
-);
-
-const EnhancedStockCard = ({ stock, thesisEntries = [], onRemove, onAddEntry, onDeleteEntry, isEditMode }) => {
-    const [data, setData] = useState({ loading: true });
+// Simplified StockCard that receives pre-fetched data
+const EnhancedStockCard = ({ stock, quoteData, thesisEntries = [], onRemove, onAddEntry, onDeleteEntry, isEditMode }) => {
     const [showAllEntries, setShowAllEntries] = useState(false);
     const [showAddForm, setShowAddForm] = useState(false);
     const [newEntry, setNewEntry] = useState('');
-
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [quote, metrics, ratios, target, income] = await Promise.all([
-                    fetchStockQuote(stock.ticker),
-                    fetchKeyMetrics(stock.ticker),
-                    fetchFinancialRatios(stock.ticker),
-                    fetchPriceTarget(stock.ticker),
-                    fetchIncomeStatement(stock.ticker)
-                ]);
-
-                const grossMargin = income && income[0] ? income[0].grossMargin : null;
-
-                setData({
-                    ticker: stock.ticker,
-                    name: quote?.name || stock.ticker,
-                    price: quote?.price,
-                    change: quote?.change,
-                    changePercent: quote?.changePercent,
-                    marketCap: quote?.marketCap,
-                    trailingPE: quote?.pe || ratios?.peRatio,
-                    forwardPE: ratios?.pegRatio ? (quote?.pe / ratios?.pegRatio) : null,
-                    priceToFCF: metrics?.priceToFreeCashFlow || ratios?.priceToFreeCashFlow,
-                    fcfYield: metrics?.freeCashFlowPerShare && quote?.price
-                        ? (metrics.freeCashFlowPerShare / quote.price)
-                        : null,
-                    grossMargin: grossMargin,
-                    targetHigh: target?.targetHigh,
-                    targetLow: target?.targetLow,
-                    targetMedian: target?.targetMedian || target?.targetConsensus,
-                    dayHigh: quote?.dayHigh,
-                    dayLow: quote?.dayLow,
-                    yearHigh: quote?.yearHigh,
-                    yearLow: quote?.yearLow,
-                    loading: false
-                });
-            } catch (err) {
-                console.error(`Error fetching ${stock.ticker}:`, err);
-                setData({ ticker: stock.ticker, name: stock.ticker, loading: false, error: true });
-            }
-        };
-        fetchData();
-    }, [stock.ticker]);
 
     const handleAddEntry = async (e) => {
         e.preventDefault();
@@ -93,6 +36,9 @@ const EnhancedStockCard = ({ stock, thesisEntries = [], onRemove, onAddEntry, on
         setNewEntry('');
         setShowAddForm(false);
     };
+
+    // Use pre-fetched quote data or show loading
+    const data = quoteData || { loading: true };
 
     if (data.loading) {
         return (
@@ -120,7 +66,7 @@ const EnhancedStockCard = ({ stock, thesisEntries = [], onRemove, onAddEntry, on
         );
     }
 
-    const isPositive = data.changePercent >= 0;
+    const isPositive = (data.changePercent || 0) >= 0;
     const ChangeIcon = isPositive ? ArrowUpRight : ArrowDownRight;
     const colorClass = isPositive ? 'text-finance-green' : 'text-finance-red';
 
@@ -151,8 +97,8 @@ const EnhancedStockCard = ({ stock, thesisEntries = [], onRemove, onAddEntry, on
             {/* Header: Ticker, Name, Price, Change */}
             <div className="flex justify-between items-start mb-2">
                 <div>
-                    <h3 className="font-bold text-xl text-white">{data.ticker}</h3>
-                    <p className="text-xs text-finance-muted truncate max-w-[140px]">{data.name}</p>
+                    <h3 className="font-bold text-xl text-white">{stock.ticker}</h3>
+                    <p className="text-xs text-finance-muted truncate max-w-[140px]">{data.name || stock.ticker}</p>
                 </div>
                 <div className="text-right">
                     <p className="font-mono text-lg text-white font-bold">
@@ -253,7 +199,7 @@ const EnhancedStockCard = ({ stock, thesisEntries = [], onRemove, onAddEntry, on
                 </div>
             )}
 
-            {/* 52-Week Range Bar */}
+            {/* 52-Week Range Bar - OPTIMIZED: Uses yearHigh/yearLow from quote */}
             {data.yearLow && data.yearHigh && data.price && (
                 <div className="mb-3">
                     <div className="flex justify-between text-[9px] text-gray-500 mb-1">
@@ -276,33 +222,23 @@ const EnhancedStockCard = ({ stock, thesisEntries = [], onRemove, onAddEntry, on
                 </div>
             )}
 
-            {/* Key Metrics Grid */}
-            <div className="grid grid-cols-4 gap-2 pt-3 border-t border-gray-800">
-                <StatBox label="Mkt Cap" value={formatLargeNumber(data.marketCap)} />
-                <StatBox label="P/E (Tr)" value={data.trailingPE ? data.trailingPE.toFixed(1) : '-'} />
-                <StatBox label="P/FCF" value={data.priceToFCF ? data.priceToFCF.toFixed(1) : '-'} />
-                <StatBox label="Gross Mgn" value={formatPercent(data.grossMargin)} />
-            </div>
-
-            {/* Analyst Targets */}
-            {(data.targetLow || data.targetMedian || data.targetHigh) && (
-                <div className="mt-3 pt-3 border-t border-gray-800">
-                    <div className="flex items-center gap-1 text-[9px] text-gray-500 mb-1">
-                        <Target className="w-3 h-3" />
-                        <span>Analyst Targets</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                        <span className="text-finance-red">${data.targetLow?.toFixed(0) || '-'}</span>
-                        <span className="text-finance-accent font-medium">${data.targetMedian?.toFixed(0) || '-'}</span>
-                        <span className="text-finance-green">${data.targetHigh?.toFixed(0) || '-'}</span>
-                    </div>
-                    <div className="flex justify-between text-[8px] text-gray-600">
-                        <span>Low</span>
-                        <span>Median</span>
-                        <span>High</span>
-                    </div>
+            {/* Key Metrics - OPTIMIZED: Uses PE and marketCap from quote, detailed metrics on detail page */}
+            <div className="grid grid-cols-3 gap-2 pt-3 border-t border-gray-800">
+                <div className="text-center">
+                    <p className="text-[9px] text-gray-500 uppercase">Mkt Cap</p>
+                    <p className="text-xs font-medium text-gray-300">{formatLargeNumber(data.marketCap)}</p>
                 </div>
-            )}
+                <div className="text-center">
+                    <p className="text-[9px] text-gray-500 uppercase">P/E</p>
+                    <p className="text-xs font-medium text-gray-300">{data.pe ? data.pe.toFixed(1) : '-'}</p>
+                </div>
+                <div className="text-center">
+                    <p className="text-[9px] text-gray-500 uppercase">Chg $</p>
+                    <p className={clsx("text-xs font-medium", isPositive ? "text-finance-green" : "text-finance-red")}>
+                        {data.change ? (data.change >= 0 ? '+' : '') + data.change.toFixed(2) : '-'}
+                    </p>
+                </div>
+            </div>
         </div>
     );
 
@@ -311,7 +247,7 @@ const EnhancedStockCard = ({ stock, thesisEntries = [], onRemove, onAddEntry, on
     }
 
     return (
-        <Link to={`/stock/${data.ticker}`} className="block">
+        <Link to={`/stock/${stock.ticker}`} className="block">
             <CardContent />
         </Link>
     );
@@ -377,12 +313,13 @@ const AddStockModal = ({ isOpen, onClose, onAdd }) => {
 
 const PortfolioSection = () => {
     const [stocks, setStocks] = useState([]);
-    const [thesisMap, setThesisMap] = useState({}); // { stockId: [entries] }
+    const [quotesData, setQuotesData] = useState({}); // OPTIMIZED: Batch-fetched quotes
+    const [thesisMap, setThesisMap] = useState({});
     const [loading, setLoading] = useState(true);
     const [isEditMode, setIsEditMode] = useState(false);
     const [showAddModal, setShowAddModal] = useState(false);
 
-    // Fetch stocks and thesis entries from Supabase
+    // Fetch stocks from Supabase and batch-fetch all quotes in ONE API call
     useEffect(() => {
         const fetchData = async () => {
             try {
@@ -402,6 +339,14 @@ const PortfolioSection = () => {
 
                 setStocks(stocksData);
                 setThesisMap(entriesByStock);
+
+                // OPTIMIZED: Batch fetch all quotes in ONE API call instead of 5 calls per stock
+                if (stocksData.length > 0) {
+                    const tickers = stocksData.map(s => s.ticker);
+                    console.log(`[API OPTIMIZATION] Fetching ${tickers.length} stocks in 1 batch call`);
+                    const batchQuotes = await fetchBatchQuotes(tickers);
+                    setQuotesData(batchQuotes);
+                }
             } catch (err) {
                 console.error('Error fetching data:', err);
             } finally {
@@ -429,6 +374,11 @@ const PortfolioSection = () => {
         });
         setStocks(stocksData);
         setThesisMap(entriesByStock);
+
+        // Fetch quote for new stock
+        const tickers = stocksData.map(s => s.ticker);
+        const batchQuotes = await fetchBatchQuotes(tickers);
+        setQuotesData(batchQuotes);
     };
 
     const handleRemoveStock = async (id) => {
@@ -436,7 +386,6 @@ const PortfolioSection = () => {
             await removeStock(id);
             const stocksData = await getCuratedStocks();
             setStocks(stocksData);
-            // Remove from thesis map
             const newMap = { ...thesisMap };
             delete newMap[id];
             setThesisMap(newMap);
@@ -507,6 +456,7 @@ const PortfolioSection = () => {
                     <EnhancedStockCard
                         key={stock.id}
                         stock={stock}
+                        quoteData={quotesData[stock.ticker] || { loading: Object.keys(quotesData).length === 0 }}
                         thesisEntries={thesisMap[stock.id] || []}
                         isEditMode={isEditMode}
                         onRemove={handleRemoveStock}

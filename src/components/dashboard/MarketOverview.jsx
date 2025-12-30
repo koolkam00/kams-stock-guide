@@ -1,12 +1,24 @@
 import React, { useEffect, useState } from 'react';
-import { fetchPriceChange, fetchCompanyOverview, fetchTreasuryRates, fetchStockQuote } from '../../services/api';
+import { fetchBatchQuotes, fetchBatchPriceChanges, fetchTreasuryRates } from '../../services/api';
 import { Activity, TrendingUp, DollarSign, Percent } from 'lucide-react';
 
-// Use ETF proxies for indices (they have better data coverage in FMP)
+// Index configuration: actual index symbols for price, ETFs for PE ratios
 const INDICES = [
-    { name: 'S&P 500', ticker: 'SPY' },
-    { name: 'Nasdaq 100', ticker: 'QQQ' },
-    { name: 'Dow Jones', ticker: 'DIA' }
+    {
+        name: 'S&P 500',
+        indexSymbol: '^GSPC',
+        etfSymbol: 'SPY'
+    },
+    {
+        name: 'Nasdaq 100',
+        indexSymbol: '^NDX',
+        etfSymbol: 'QQQ'
+    },
+    {
+        name: 'Dow Jones',
+        indexSymbol: '^DJI',
+        etfSymbol: 'DIA'
+    }
 ];
 
 const PERIODS = [
@@ -17,12 +29,17 @@ const PERIODS = [
 ];
 
 const MarketTableRow = ({ indexData }) => {
-    const { name, currentPrice, metrics, peData, loading, error } = indexData;
+    const { name, indexPrice, etfPrice, metrics, peData, loading, error } = indexData;
 
     if (loading) return (
-        <div className="grid grid-cols-7 gap-4 py-4 border-b border-gray-800 animate-pulse">
-            <div className="col-span-1 h-4 bg-gray-800 rounded"></div>
-            <div className="col-span-6 h-4 bg-gray-800 rounded"></div>
+        <div className="grid grid-cols-8 gap-2 py-4 border-b border-gray-800 animate-pulse">
+            <div className="col-span-2 h-4 bg-gray-800 rounded"></div>
+            <div className="h-4 bg-gray-800 rounded"></div>
+            <div className="h-4 bg-gray-800 rounded"></div>
+            <div className="h-4 bg-gray-800 rounded"></div>
+            <div className="h-4 bg-gray-800 rounded"></div>
+            <div className="h-4 bg-gray-800 rounded"></div>
+            <div className="h-4 bg-gray-800 rounded"></div>
         </div>
     );
 
@@ -32,10 +49,14 @@ const MarketTableRow = ({ indexData }) => {
         </div>
     );
 
+    const displayPrice = indexPrice || etfPrice;
+
     return (
         <div className="grid grid-cols-8 gap-2 py-3 border-b border-gray-800 items-center text-sm hover:bg-gray-800/20 transition-colors">
             <div className="col-span-2 font-medium text-white">{name}</div>
-            <div className="text-right text-white font-mono">{currentPrice?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+            <div className="text-right text-white font-mono">
+                {displayPrice ? displayPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
+            </div>
 
             {PERIODS.map((period) => {
                 const val = metrics?.[period.key];
@@ -56,7 +77,7 @@ const MarketTableRow = ({ indexData }) => {
     );
 };
 
-const MacroStat = ({ title, value, date, icon: Icon, isCurrency }) => (
+const MacroStat = ({ title, value, icon: Icon, isCurrency }) => (
     <div className="flex items-center gap-3 p-3 bg-gray-800/30 rounded-lg border border-gray-800/50">
         <div className="bg-gray-800 p-2 rounded-md text-finance-accent">
             <Icon className="w-4 h-4" />
@@ -73,56 +94,57 @@ const MacroStat = ({ title, value, date, icon: Icon, isCurrency }) => (
 const MarketOverview = () => {
     const [indexData, setIndexData] = useState({});
     const [macroData, setMacroData] = useState({ fed: null, bond: null, gold: null, oil: null });
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         const fetchData = async () => {
-            // Indices - Use ETF proxies for better data
-            const indexResults = {};
-            await Promise.all(INDICES.map(async (idx) => {
-                try {
-                    setIndexData(prev => ({ ...prev, [idx.ticker]: { loading: true, name: idx.name } }));
+            try {
+                // OPTIMIZED: Collect all symbols and fetch in batch
+                const allIndexSymbols = INDICES.map(idx => idx.indexSymbol);
+                const allETFSymbols = INDICES.map(idx => idx.etfSymbol);
+                const macroSymbols = ['GLD', 'USO'];
 
-                    // Fetch quote, price changes, and overview in parallel
-                    const [quote, priceChange, overview] = await Promise.all([
-                        fetchStockQuote(idx.ticker),
-                        fetchPriceChange(idx.ticker),
-                        fetchCompanyOverview(idx.ticker)
-                    ]);
+                // Combine all symbols for batch fetch (6 + 2 = 8 symbols in 1 call)
+                const allSymbols = [...allIndexSymbols, ...allETFSymbols, ...macroSymbols];
 
-                    const currentPrice = quote?.price;
+                console.log(`[API OPTIMIZATION] Fetching ${allSymbols.length} symbols in 1 batch call`);
 
-                    // Use pre-calculated price changes from FMP
-                    const metrics = priceChange || {};
+                // OPTIMIZED: 1 batch call for all quotes + 1 call for treasury + N calls for price changes
+                const [batchQuotes, priceChanges, treasuryRates] = await Promise.all([
+                    fetchBatchQuotes(allSymbols),
+                    fetchBatchPriceChanges(allETFSymbols), // Only ETFs have price change data
+                    fetchTreasuryRates()
+                ]);
 
-                    indexResults[idx.ticker] = {
+                console.log('Batch Quotes:', batchQuotes);
+                console.log('Price Changes:', priceChanges);
+                console.log('Treasury Rates:', treasuryRates);
+
+                // Build index data from batch results
+                const indexResults = {};
+                INDICES.forEach(idx => {
+                    const indexQuote = batchQuotes[idx.indexSymbol];
+                    const etfQuote = batchQuotes[idx.etfSymbol];
+                    const changes = priceChanges[idx.etfSymbol];
+
+                    indexResults[idx.etfSymbol] = {
                         name: idx.name,
-                        currentPrice,
-                        metrics,
+                        indexPrice: indexQuote?.price,
+                        etfPrice: etfQuote?.price,
+                        metrics: changes || {},
                         peData: {
-                            current: quote?.pe || overview?.peRatio,
-                            trailing: quote?.pe || overview?.trailingPE,
-                            forward: overview?.forwardPE
+                            trailing: etfQuote?.pe,
+                            forward: null // Would need profile call for forward PE
                         },
                         loading: false
                     };
-                } catch (err) {
-                    console.error(`Error fetching ${idx.ticker}:`, err);
-                    indexResults[idx.ticker] = { name: idx.name, error: true, loading: false };
-                }
-            }));
-            setIndexData(prev => ({ ...prev, ...indexResults }));
+                });
 
-            // Macro Data & Commodities
-            try {
-                const [treasuryRates, goldQuote, oilQuote] = await Promise.all([
-                    fetchTreasuryRates(),
-                    fetchStockQuote('GLD'), // SPDR Gold Shares ETF
-                    fetchStockQuote('USO')  // United States Oil Fund ETF
-                ]);
+                setIndexData(indexResults);
 
-                console.log('Treasury Rates:', treasuryRates);
-                console.log('Gold Quote:', goldQuote);
-                console.log('Oil Quote:', oilQuote);
+                // Macro data from batch results
+                const goldQuote = batchQuotes['GLD'];
+                const oilQuote = batchQuotes['USO'];
 
                 setMacroData({
                     fed: { value: treasuryRates?.month3 || treasuryRates?.month1 || treasuryRates?.year2 },
@@ -130,16 +152,24 @@ const MarketOverview = () => {
                     gold: { value: goldQuote?.price },
                     oil: { value: oilQuote?.price }
                 });
-            } catch (e) {
-                console.error("Macro fetch failed", e);
-            }
 
+            } catch (e) {
+                console.error("Market Overview fetch failed", e);
+                // Set error state for all indices
+                const errorResults = {};
+                INDICES.forEach(idx => {
+                    errorResults[idx.etfSymbol] = { name: idx.name, error: true, loading: false };
+                });
+                setIndexData(errorResults);
+            } finally {
+                setLoading(false);
+            }
         };
 
         fetchData();
     }, []);
 
-    const orderedData = INDICES.map(idx => indexData[idx.ticker] || { loading: true, name: idx.name });
+    const orderedData = INDICES.map(idx => indexData[idx.etfSymbol] || { loading: true, name: idx.name });
 
     return (
         <div className="mb-10 p-6 bg-finance-card border border-gray-800 rounded-xl relative overflow-hidden">
@@ -186,7 +216,7 @@ const MarketOverview = () => {
                         {/* Header */}
                         <div className="grid grid-cols-8 gap-2 pb-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800">
                             <div className="col-span-2">Index</div>
-                            <div className="text-right">Price</div>
+                            <div className="text-right">Level</div>
                             <div className="text-right">1D</div>
                             <div className="text-right">1W</div>
                             <div className="text-right">1M</div>

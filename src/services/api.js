@@ -7,13 +7,13 @@ const BASE_URL = 'https://financialmodelingprep.com/stable';
 // OPTIMIZED: Extended TTLs to reduce API calls (250/day limit on free tier)
 const CACHE_PREFIX = 'fmp_api_';
 const CACHE_TTL = {
-    quote: 5 * 60 * 1000,           // 5 minutes for quotes (was 1 min)
-    profile: 7 * 24 * 60 * 60 * 1000, // 7 days for company profiles (was 24h)
-    history: 6 * 60 * 60 * 1000,    // 6 hours for historical data (was 1h)
-    financials: 7 * 24 * 60 * 60 * 1000, // 7 days for financials (was 24h)
-    news: 60 * 60 * 1000,           // 1 hour for news (was 15 min)
-    search: 7 * 24 * 60 * 60 * 1000, // 7 days for search (was 24h)
-    macro: 24 * 60 * 60 * 1000,     // 24 hours for macro data (was 6h)
+    quote: 15 * 60 * 1000,          // 15 minutes for quotes (was 5 min)
+    profile: 30 * 24 * 60 * 60 * 1000, // 30 days for company profiles (was 7 days)
+    history: 12 * 60 * 60 * 1000,   // 12 hours for historical data (was 6h)
+    financials: 30 * 24 * 60 * 60 * 1000, // 30 days for financials (was 7 days)
+    news: 6 * 60 * 60 * 1000,       // 6 hours for news (was 1h)
+    search: 30 * 24 * 60 * 60 * 1000, // 30 days for search (was 7 days)
+    macro: 24 * 60 * 60 * 1000,     // 24 hours for macro data
     priceChange: 15 * 60 * 1000     // 15 minutes for price changes
 };
 
@@ -269,6 +269,95 @@ export const fetchBatchQuotes = async (tickers) => {
                 results[ticker] = staleData;
             } else {
                 results[ticker] = getMockQuote(ticker);
+            }
+        });
+        return results;
+    }
+};
+
+/**
+ * Batch Fetch Price Changes for Multiple Symbols (OPTIMIZED)
+ * Note: FMP doesn't have a true batch endpoint for price changes, 
+ * but we can optimize by checking cache first and only fetching uncached
+ */
+export const fetchBatchPriceChanges = async (tickers) => {
+    if (!API_KEY || !tickers || tickers.length === 0) return {};
+
+    const results = {};
+    const promises = [];
+
+    tickers.forEach(ticker => {
+        const cached = getCachedData(`pricechange_${ticker}`);
+        if (cached) {
+            results[ticker] = cached;
+        } else {
+            promises.push(
+                fetchPriceChange(ticker).then(data => {
+                    results[ticker] = data;
+                })
+            );
+        }
+    });
+
+    await Promise.all(promises);
+    return results;
+};
+
+/**
+ * Batch Fetch Company Profiles (OPTIMIZED - uses FMP batch profile endpoint)
+ */
+export const fetchBatchProfiles = async (tickers) => {
+    if (!API_KEY || !tickers || tickers.length === 0) return {};
+
+    const results = {};
+    const uncachedTickers = [];
+
+    tickers.forEach(ticker => {
+        const cached = getCachedData(`profile_${ticker}`);
+        if (cached) {
+            results[ticker] = cached;
+        } else {
+            uncachedTickers.push(ticker);
+        }
+    });
+
+    if (uncachedTickers.length === 0) return results;
+
+    try {
+        const symbolsParam = uncachedTickers.join(',');
+        const response = await fetch(`${BASE_URL}/profile?symbol=${symbolsParam}&apikey=${API_KEY}`);
+        const data = await response.json();
+        checkApiError(data);
+
+        if (data && Array.isArray(data)) {
+            data.forEach(profile => {
+                const result = {
+                    name: profile.companyName,
+                    symbol: profile.symbol,
+                    sector: profile.sector,
+                    industry: profile.industry,
+                    description: profile.description,
+                    ceo: profile.ceo,
+                    website: profile.website,
+                    employees: profile.fullTimeEmployees,
+                    marketCap: profile.mktCap,
+                    peRatio: profile.peRatio,
+                    forwardPE: profile.forwardPE,
+                    beta: profile.beta
+                };
+                setCachedData(`profile_${profile.symbol}`, result, 'profile');
+                results[profile.symbol] = result;
+            });
+        }
+        return results;
+    } catch (e) {
+        console.warn(`FMP Error for Batch Profile:`, e.message);
+        uncachedTickers.forEach(ticker => {
+            const staleData = getStaleCachedData(`profile_${ticker}`);
+            if (staleData) {
+                results[ticker] = staleData;
+            } else {
+                results[ticker] = getMockProfile(ticker);
             }
         });
         return results;
